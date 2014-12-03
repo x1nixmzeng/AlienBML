@@ -97,18 +97,12 @@ namespace AlienBML
                 return true;
             }
 
-            public bool Write(BinaryWriter bw, u32 pool_1_offset)
+            public bool Write(BinaryWriter bw)
             {
-                bool valid = true;
-
-                // attributes are always from pool1
-                Name.Fixup(pool_1_offset, 0);
-                Value.Fixup(pool_1_offset, 0);
-
                 bw.Write(Name.offset);
                 bw.Write(Value.offset);
 
-                return valid;
+                return true;
             }
 
             static public u32 Size()
@@ -444,11 +438,21 @@ namespace AlienBML
                     {
                         // has inner kept; child optional
                         Flags.Info = 3; // or 7
+
+                        if( End2 == null )
+                        {
+                            End2 = new AlienString.Ref("\r\n", false);
+                        }
                     }
                     else
                     {
                         // end spacing, child optional
                         Flags.Info = 2; // or 6
+
+                        if (End == null)
+                        {
+                            End = new AlienString.Ref("\r\n", false);
+                        }
                     }
                 }
             }
@@ -462,32 +466,34 @@ namespace AlienBML
                 Flags.Write(bw);
                 foreach(Attribute a in Attributes)
                 {
-                    a.Write(bw, of1); // uh, we need to pass this in?
+                    a.Name.Fixup(of1, of2);
+                    a.Value.Fixup(of1, of2);
+                    a.Write(bw);
                 }
 
                 switch (Flags.Info)
                 {
                     case 0:
-                        bw.Write(Offset); // this needs to be resolved via Fixup xxxxxxxxx todo
+                        bw.Write(Offset);
                         break;
                     case 1:
                         End.Fixup(of1, of2);
-                        bw.Write(End.offset); // this needs to be resolved via Fixup xxxxxxxxx todo
-                        bw.Write(Offset); // this needs to be resolved via Fixup xxxxxxxxx todo
+                        bw.Write(End.offset);
+                        bw.Write(Offset);
                         break;
                     case 2:
                     case 6:
                         End.Fixup(of1, of2);
-                        bw.Write(End.offset); // this needs to be resolved via Fixup xxxxxxxxx todo
-                        if (Flags.Children > 0) bw.Write(Offset); // this needs to be resolved via Fixup xxxxxxxxx todo
+                        bw.Write(End.offset);
+                        if (Flags.Children > 0) bw.Write(Offset);
                         break;
                     case 3:
                     case 7:
                         Inner.Fixup(of1, of2);
                         End2.Fixup(of1, of2);
-                        bw.Write(Inner.offset); // this needs to be resolved via Fixup xxxxxxxxx todo
-                        bw.Write(End2.offset); // this needs to be resolved via Fixup xxxxxxxxx todo
-                        if (Flags.Children > 0) bw.Write(Offset); // this needs to be resolved via Fixup xxxxxxxxx todo
+                        bw.Write(Inner.offset);
+                        bw.Write(End2.offset);
+                        if (Flags.Children > 0) bw.Write(Offset);
                         break;
                     default:
                         Console.WriteLine("Unsupported info");
