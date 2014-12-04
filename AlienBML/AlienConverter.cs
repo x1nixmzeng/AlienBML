@@ -168,8 +168,7 @@ namespace AlienBML
             Console.WriteLine("Alien Isolation BML Converter");
             Console.WriteLine("Written by WRS (xentax.com)");
 
-            // source and target cannot be the same file
-            if (filename_src == null || ( filename_dst != null && ( filename_src != filename_dst ) ))
+            if (filename_src == null)
             {
                 ShowInfo();
                 return true;
