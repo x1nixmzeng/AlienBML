@@ -111,17 +111,53 @@ namespace AlienBML
             }
         }
 
-        // complete.
         class NodeFlags
         {
             public u8 Attributes { get; set; }
-            public u8 Info { get; set; }
+
+            public u8 RawInfo { get; set; }
+
+            public bool unknown_1
+            {
+                // 1 << 0
+                get { return GetFlag(0x1); }
+                set { SetFlag(0x1, value); }
+            }
+
+            public bool unknown_2
+            {
+                // 1 << 1
+                get { return GetFlag(0x2); }
+                set { SetFlag(0x2, value); }
+            }
+
+            public bool ContinueSequence
+            {
+                // 1 << 2
+                get { return GetFlag(0x4); }
+                set { SetFlag(0x4, value); }
+            }
+
+            bool GetFlag(u8 mask)
+            {
+                return Convert.ToBoolean(RawInfo & mask);
+            }
+
+            void SetFlag(u8 mask, bool value)
+            {
+                RawInfo &= Convert.ToByte((~mask) & 0xFF);
+                if( value )
+                {
+                    RawInfo |= mask;
+                }
+            }
+
             public u16 Children { get; set; }
 
             public NodeFlags()
             {
                 Attributes = 0;
-                Info = 0;
+                RawInfo = 0;
                 Children = 0;
             }
 
@@ -135,9 +171,8 @@ namespace AlienBML
                 // 8-bits : number of attributes
                 Attributes = Convert.ToByte(bytes & 0xFF);
 
-                // 3-bits : flags
-                // xxxxx todo split up flags
-                Info = Convert.ToByte((bytes >> 8) & 0x7);
+                // 3-bits : info flags
+                RawInfo = Convert.ToByte((bytes >> 8) & 0x7);
 
                 // 21-bits : number of child nodes
                 u32 raw_children = (bytes >> 11) & 0x1FFFFF;
@@ -164,7 +199,7 @@ namespace AlienBML
                 u32 tmp = Children;
                 bytes |= tmp << 11;
 
-                tmp = Info;
+                tmp = RawInfo;
                 bytes |= (tmp & 0x7) << 8;
 
                 tmp = Attributes;
@@ -283,7 +318,17 @@ namespace AlienBML
                     End = new AlienString.Ref("\r\n", false);
                 }
 
-                Fixup();
+                bool has_element_sibling = false;
+                
+                if( ele.NextSibling != null)
+                {
+                    if( ele.NextSibling.NodeType == XmlNodeType.Element )
+                    {
+                        has_element_sibling = true;
+                    }
+                }
+
+                Fixup(has_element_sibling);
 
                 return valid;
             }
@@ -323,7 +368,7 @@ namespace AlienBML
                     }
                 }
 
-                switch (Flags.Info)
+                switch (Flags.RawInfo)
                 {
                     case 0: // 000
                         // fake node
@@ -337,8 +382,8 @@ namespace AlienBML
 
                         break;
 
-                    case 2: // 010
-                    case 6: // 110
+                    case 2: // 010 -> last in sequence
+                    case 6: // 110 -> continued sequence
                         End = new AlienString.Ref(br, false);
 
                         if (Flags.Children > 0)
@@ -348,8 +393,8 @@ namespace AlienBML
 
                         break;
 
-                    case 3: // 011
-                    case 7: // 111
+                    case 3: // 011 -> last in sequence
+                    case 7: // 111 -> continued sequence
 
                         // note: inner text is stored in the second pool
 
@@ -382,7 +427,7 @@ namespace AlienBML
                 // attribute entries (read from flags)
                 my_size += Attribute.Size() * Flags.Attributes;
                 // check against info
-                switch( Flags.Info )
+                switch( Flags.RawInfo )
                 {
                     case 0:
                         my_size += 4;
@@ -408,8 +453,9 @@ namespace AlienBML
                 return my_size;
             }
 
-            public void Fixup()
+            public void Fixup(bool last_child)
             {
+                Flags.RawInfo = 0;
                 Flags.Attributes = Convert.ToByte(Attributes.Count & 0xFF);
                 Flags.Children = Convert.ToUInt16(Nodes.Count & 0xFFFF);
 
@@ -424,12 +470,20 @@ namespace AlienBML
                     if( Flags.Attributes == 0 )
                     {
                         // ignored
-                        Flags.Info = 0;
+                        Flags.unknown_1 = false;
+                        Flags.unknown_2 = false;
+                        Flags.ContinueSequence = false;
+
+                        // raw flags are now 000
                     }
                     else
                     {
                         // declaration kept - child mandatory
-                        Flags.Info = 1;
+                        Flags.unknown_1 = true;
+                        Flags.unknown_2 = false;
+                        Flags.ContinueSequence = false;
+
+                        // raw flags are now 001
                     }
                 }
                 else
@@ -437,7 +491,11 @@ namespace AlienBML
                     if( Inner != null )
                     {
                         // has inner kept; child optional
-                        Flags.Info = 3; // or 7
+                        Flags.unknown_1 = true;
+                        Flags.unknown_2 = true;
+                        Flags.ContinueSequence = !last_child;
+
+                        // raw flags are now either 011 or 111
 
                         if( End2 == null )
                         {
@@ -447,7 +505,11 @@ namespace AlienBML
                     else
                     {
                         // end spacing, child optional
-                        Flags.Info = 2; // or 6
+                        Flags.unknown_1 = false;
+                        Flags.unknown_2 = true;
+                        Flags.ContinueSequence = !last_child;
+
+                        // raw flags are now either 010 or 110
 
                         if (End == null)
                         {
@@ -471,7 +533,7 @@ namespace AlienBML
                     a.Write(bw);
                 }
 
-                switch (Flags.Info)
+                switch (Flags.RawInfo)
                 {
                     case 0:
                         bw.Write(Offset);
@@ -747,16 +809,18 @@ namespace AlienBML
             return true;
         }
 
-        u32 CalculateNodeSize(Node n)
+        u32 CalculateNodeSize(Node n, bool last_node)
         {
             // xxx remove this modifier
-            n.Fixup();
+            n.Fixup(last_node);
 
             u32 size = n.Size();
 
+            int count = 0;
             foreach(Node c in n.Nodes)
             {
-                size += CalculateNodeSize(c);
+                size += CalculateNodeSize(c, count == ( n.Nodes.Count - 1));
+                ++count;
             }
 
             return size;
@@ -796,7 +860,7 @@ namespace AlienBML
         {
             // pass 1: calculate file size
 
-            u32 node_size = CalculateNodeSize(root);
+            u32 node_size = CalculateNodeSize(root, true);
 
             MemoryStream p1 = AlienString.StringPool1.Export();
             MemoryStream p2 = AlienString.StringPool2.Export();
