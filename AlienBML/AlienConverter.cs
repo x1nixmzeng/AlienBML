@@ -13,6 +13,8 @@ namespace AlienBML
 {
     class AlienConverter
     {
+        static string version_string = "0.02";
+
         private void ShowInfo()
         {
             Console.WriteLine("Usage:");
@@ -165,7 +167,7 @@ namespace AlienBML
 
         public bool Run()
         {
-            Console.WriteLine("Alien Isolation BML Converter");
+            Console.WriteLine("Alien Isolation BML Converter v{0}", version_string);
             Console.WriteLine("Written by WRS (xentax.com)");
 
             if (filename_src == null)
