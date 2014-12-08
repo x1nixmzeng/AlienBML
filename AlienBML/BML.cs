@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.IO;
 using System.Xml;
+using System.Collections;
 
 namespace AlienBML
 {
@@ -140,7 +141,7 @@ namespace AlienBML
 
             bool GetFlag(u8 mask)
             {
-                return Convert.ToBoolean(RawInfo & mask);
+                return (RawInfo & mask) != 0;
             }
 
             void SetFlag(u8 mask, bool value)
@@ -187,7 +188,7 @@ namespace AlienBML
                 }
 #endif
 
-                Children = Convert.ToUInt16(raw_children);
+                Children = Convert.ToUInt16(raw_children & 0xFFFF);
 
                 return true;
             }
@@ -226,8 +227,8 @@ namespace AlienBML
             public AlienString.Ref End { get; private set; }
             public AlienString.Ref Inner { get; private set; }
 
-            public u32 Start { get; private set; }
-            public u32 Offset { get; set; }
+            public u32 Offset { get; set; } // public modifier
+            public u32 Depth { get; private set; }
 
             public NodeFlags Flags { get; private set; }
 
@@ -236,21 +237,37 @@ namespace AlienBML
                 Nodes = new List<Node>();
                 Attributes = new List<Attribute>();
                 Flags = new NodeFlags();
+                Depth = 0;
             }
 
             public void SetDeclaration()
             {
                 Text = new AlienString.Ref("?xml", true);
                 Flags.Children = 0;
-
-                //End = new AlienString.Ref("\r\n", false);
             }
 
-            // depth is used to create the spacing text
-            public bool ReadXML(XmlElement ele, int depth = 0)
+            bool HasElementSibling(XmlElement ele)
+            {
+                XmlNode sibling = ele.NextSibling;
+
+                while( sibling != null )
+                {
+                    if( sibling.NodeType == XmlNodeType.Element )
+                    {
+                        return true;
+                    }
+
+                    sibling = sibling.NextSibling;
+                }
+
+                return false;
+            }
+
+            public bool ReadXML(XmlElement ele, u32 depth)
             {
                 bool valid = true;
 
+                Depth = depth;
                 Text = new AlienString.Ref(ele.Name, true);
 
                 if (ele.HasAttributes)
@@ -302,44 +319,32 @@ namespace AlienBML
                                 
                                 break;
 
+                            case XmlNodeType.Comment:
+
+                                // Could be added as Inner/End2, but not required
+                                Console.WriteLine("Found XML comment - skipping it");
+
+                                break;
+
                             default:
-                                Console.WriteLine("Unhandled XML type");
-                                valid = false;
+                                Console.WriteLine("XmlNodeType not handled - skipping it");
                                 break;
                         }
                     }
                 }
 
-                // bonus: whitespacing
+                bool last_child = !HasElementSibling(ele);
 
-                if( Nodes.Count > 0 )
-                {
-                    // include all indentation?
-                    End = new AlienString.Ref("\r\n", false);
-                }
-
-                bool has_element_sibling = false;
-                
-                if( ele.NextSibling != null)
-                {
-                    if( ele.NextSibling.NodeType == XmlNodeType.Element )
-                    {
-                        has_element_sibling = true;
-                    }
-                }
-
-                Fixup(has_element_sibling);
+                Fixup(last_child);
 
                 return valid;
             }
 
-            public bool Read(BinaryReader br)
+            public bool Read(BinaryReader br, u32 depth)
             {
                 bool valid = true;
 
-                // we need this offset to tie nodes together
-                Start = (u32)br.BaseStream.Position;
-
+                Depth = depth;
                 Text = new AlienString.Ref(br, true);
 
                 valid &= Flags.Read(br);
@@ -371,8 +376,15 @@ namespace AlienBML
                 switch (Flags.RawInfo)
                 {
                     case 0: // 000
-                        // fake node
-                        End = new AlienString.Ref(br, false);
+
+                        Offset = br.ReadUInt32();
+
+#if DEBUG
+                        if( Offset != 28 )
+                        {
+                            Console.WriteLine("Interesting offset {0}", Offset);
+                        }
+#endif
 
                         break;
 
@@ -461,15 +473,10 @@ namespace AlienBML
 
                 if( Text.value == "?xml" )
                 {
-                    // both reference spacing
-                    if (End == null)
-                    {
-                        End = new AlienString.Ref("\r\n", false);
-                    }
-
                     if( Flags.Attributes == 0 )
                     {
-                        // ignored
+                        // just offsets to child
+
                         Flags.unknown_1 = false;
                         Flags.unknown_2 = false;
                         Flags.ContinueSequence = false;
@@ -478,6 +485,11 @@ namespace AlienBML
                     }
                     else
                     {
+                        if (End == null)
+                        {
+                            End = new AlienString.Ref("\r\n", false);
+                        }
+
                         // declaration kept - child mandatory
                         Flags.unknown_1 = true;
                         Flags.unknown_2 = false;
@@ -574,12 +586,12 @@ namespace AlienBML
             root = new Node();
         }
 
-        private bool ReadWrapper(BinaryReader br, ref Node owner)
+        private bool ReadWrapper(BinaryReader br, ref Node owner, u32 depth)
         {
             bool success = true;
 
             Node n = new Node();
-            success &= n.Read(br);
+            success &= n.Read(br, depth);
 
             // try to parse other blocks
             if( success )
@@ -588,12 +600,16 @@ namespace AlienBML
                 {
                     long pos = br.BaseStream.Position;
 
+#if DEBUG
+                    Console.WriteLine("Parsing child at {0}", n.Offset);
+#endif
+
                     // seek to child pos
                     br.BaseStream.Position = n.Offset;
 
                     for (u32 i = 0; i < n.Flags.Children; i++)
                     {
-                        success &= ReadWrapper(br, ref n);
+                        success &= ReadWrapper(br, ref n, depth + 1);
                     }
 
                     // seek back
@@ -608,21 +624,21 @@ namespace AlienBML
 
         private bool ReadAllNodes(BinaryReader br)
         {
-            bool success = root.Read(br);
+            bool success = root.Read(br, 0);
 
             // this is always the initial node
             success &= (root.Text.value == "?xml");
 
             // there should be at least 1 child node
             success &= (root.Flags.Children > 0);
-
+            
             if( !success )
             {
                 Console.WriteLine("Unexpected XML data");
                 return false;
             }
             
-            success &= ReadWrapper(br, ref root);
+            success &= ReadWrapper(br, ref root, root.Depth +1);
 
             return success;
         }
@@ -701,14 +717,19 @@ namespace AlienBML
                             root.Attributes.Add(sta);
                         }
 
-                        root.Flags.Attributes = Convert.ToByte(root.Attributes.Count);
+                        root.Flags.Attributes = Convert.ToByte(root.Attributes.Count & 0xFF);
                         
+                        break;
+
+                    case XmlNodeType.Comment:
+
+                        Console.WriteLine("Found XML comment - skipping it");
                         break;
 
                     case XmlNodeType.Element:
 
                         Node actual_root = new Node();
-                        valid &= actual_root.ReadXML(xnode as XmlElement);
+                        valid &= actual_root.ReadXML(xnode as XmlElement, root.Depth +1);
                         root.Nodes.Add(actual_root);
 
                         break;
@@ -718,7 +739,7 @@ namespace AlienBML
                         break;
                 }
             }
-
+                        
             return valid;
         }
 
@@ -800,6 +821,8 @@ namespace AlienBML
 
         public bool ExportXML(ref string xml)
         {
+            FixupAllNodes(root, true);
+
             xml = DumpNode(root);
 
 #if DEBUG
@@ -809,58 +832,86 @@ namespace AlienBML
             return true;
         }
 
-        u32 CalculateNodeSize(Node n, bool last_node)
+        void FixupAllNodes(Node n, bool last_node)
         {
-            // xxx remove this modifier
             n.Fixup(last_node);
 
-            u32 size = n.Size();
-
+            int last = n.Nodes.Count - 1;
             int count = 0;
-            foreach(Node c in n.Nodes)
-            {
-                size += CalculateNodeSize(c, count == ( n.Nodes.Count - 1));
-                ++count;
-            }
-
-            return size;
-        }
-
-        // bit of a mess. we have to determine the offsets before exporting the nodes
-        void ExportBMLNodes(BinaryWriter bw, Node n, u32 of1, u32 of2)
-        {
-            u32 first_child = (u32)bw.BaseStream.Position;
-
-            // pass 1; get size at end of all these nodes
             foreach (Node c in n.Nodes)
             {
-                first_child += c.Size();
+                FixupAllNodes(c, count == last);
+                ++count;
             }
+        }
 
-            // pass 2; write nodes and update local first_child offset
-            foreach(Node c in n.Nodes)
+        // horrible. but we need all child nodes ordered by depth in a 1d array
+        Node[] GetNodesAtDepth(List<Node> nodes, u32 depth)
+        {
+            List<Node> local_nodes = new List<Node>();
+
+            foreach( Node n in nodes )
             {
-                c.Offset = first_child;
-                c.Write(bw, of1, of2);
-
-                foreach( Node subc in c.Nodes )
+                if( n.Depth == depth )
                 {
-                    first_child += subc.Size();
+                    local_nodes.Add(n);
+                }
+                else if( n.Depth < depth )
+                {
+                    Node[] ns = GetNodesAtDepth(n.Nodes, depth);
+                    if( ns.Length > 0 )
+                    {
+                        local_nodes.AddRange(ns);
+                    }
                 }
             }
 
-            // pass 2; write children
-            foreach (Node c in n.Nodes)
+            return local_nodes.ToArray();
+        }
+
+        Node[] GetNodeArray()
+        {
+            List<Node> nodes = new List<Node>();
+
+            // level 0
+            nodes.Add(root);
+            // level 1+
+            u32 depth = 1;
+            while ( true )
             {
-                ExportBMLNodes(bw, c, of1, of2);
+                Node[] ns = GetNodesAtDepth(root.Nodes, depth);
+
+                if( ns.Length == 0 )
+                {
+                    break;
+                }
+                else
+                {
+                    nodes.AddRange(ns);
+                    ++depth;
+                }
             }
+
+            return nodes.ToArray();
         }
 
         public bool ExportBML(BinaryWriter bw)
         {
-            // pass 1: calculate file size
+            // the nodes are exported as a single-dimensional blob (instead of a tree using recursion)
 
-            u32 node_size = CalculateNodeSize(root, true);
+            // pass 1; recursively fixup all nodes (mainly the flags)
+            FixupAllNodes(root, true);
+
+            // pass 2; strip the node relationships and fetch our node blob
+            Node[] nodearray = GetNodeArray();
+
+            // pass 3; calculate offsets from known data
+            u32 node_size = 0;
+
+            foreach (Node n in nodearray)
+            {
+                node_size += n.Size();
+            }
 
             MemoryStream p1 = AlienString.StringPool1.Export();
             MemoryStream p2 = AlienString.StringPool2.Export();
@@ -879,21 +930,10 @@ namespace AlienBML
             u32 file_size = block3
                 + 1; // extra null byte
 
-            // sneak attack
+            // pass 4; fixup and export this horrible mess
             hdr.Fixup(block1, block2, block3);
 
-            // pass 2: export this mess
-
-            // header (16)
-            // node data - followed by a null character
-            // OFFSET 1 IS TAKEN FROM HERE
-            // another null character
-            // string pool 1
-            // OFFSET 2 IS TAKEN FROM HERE
-            // string pool 2
-            // OFFSET 3 IS TAKEN FROM HERE
-            // another null character
-
+            // we know the size so lets preallocate the buffer
             bw.BaseStream.SetLength(file_size);
 
             u32 of1 = block1 + 1;
@@ -901,10 +941,56 @@ namespace AlienBML
 
             // -- header
             hdr.Write(bw);
-            // -- nodes (root is a slight exception)
-            root.Offset = (u32)bw.BaseStream.Position + root.Size();
-            root.Write(bw, of1, of2);
-            ExportBMLNodes(bw, root, of1, of2);
+
+            // -- node blob
+            u32 cur_depth = 0;
+            u32 cur_depth_offset = 0;
+            foreach (Node n in nodearray)
+            {
+                // here we fixup the child offsets
+
+                // to do this, we need to calculate the starting position of the next depth. sigh.
+                if( n.Flags.Children > 0 )
+                {
+                    if( cur_depth != n.Depth +1 )
+                    {
+                        // we need to loop through the ENTIRE array just to set cur_depth_offset
+                        // only do this when the depth changes
+                        // xxxxx even better, do this outside of the loop
+
+                        // -- start from the start of the node pool
+                        cur_depth_offset = Header.Size();
+
+                        foreach( Node nn in nodearray)
+                        {
+                            if( nn.Depth == n.Depth +1 )
+                            {
+                                break;
+                            }
+
+                            // -- count all nodes up to this point
+                            cur_depth_offset += nn.Size();
+                        }
+
+                        cur_depth = n.Depth + 1;
+                    }
+
+                    // now we have an offset
+
+                    n.Offset = cur_depth_offset;
+
+                    // next, we need to update the cur_depth_offset anyway
+
+                    foreach( Node child in n.Nodes )
+                    {
+                        cur_depth_offset += child.Size();
+                    }
+                }
+
+                // now we can write it out
+                n.Write(bw, of1, of2);
+            }
+
             // -- string pools
             bw.BaseStream.Seek(block1 + 1, SeekOrigin.Begin);
             p1.WriteTo(bw.BaseStream);
