@@ -85,7 +85,7 @@ namespace AlienBML
             public bool ReadXML(string str_name, string str_value)
             {
                 Name = new AlienString.Ref(str_name, true);
-                Value = new AlienString.Ref(str_value, true);
+                Value = new AlienString.Ref(AlienString.DecodeXml(str_value), true);
 
                 return true;
             }
@@ -314,7 +314,7 @@ namespace AlienBML
 
                             case XmlNodeType.Text:
 
-                                Inner = new AlienString.Ref(xnode.Value,false);
+                                Inner = new AlienString.Ref(AlienString.DecodeXml(xnode.Value),false);
                                 End2 = new AlienString.Ref("\r\n", false);
                                 
                                 break;
@@ -755,7 +755,8 @@ namespace AlienBML
 
                 foreach (Attribute a in n.Attributes)
                 {
-                    d += String.Format(" {0}=\"{1}\"", a.Name.value, a.Value.value);
+                    // Now encodes XML entities (value)
+                    d += String.Format(" {0}=\"{1}\"", a.Name.value, AlienString.EncodeXml(a.Value.value));
                 }
             }
 
@@ -776,7 +777,8 @@ namespace AlienBML
 
                 if (n.Inner != null && n.Inner.value.Length != 0)
                 {
-                    d += n.Inner.value;
+                    // Now encodes XML entities
+                    d += AlienString.EncodeXml(n.Inner.value);
                 }
 
                 foreach (Node node in n.Nodes)

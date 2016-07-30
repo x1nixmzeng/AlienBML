@@ -13,7 +13,7 @@ namespace AlienBML
 {
     class AlienConverter
     {
-        static string version_string = "0.02";
+        static string version_string = "0.03";
 
         private void ShowInfo()
         {
@@ -61,7 +61,12 @@ namespace AlienBML
 
             Console.WriteLine("Exporting to {0}...", filename_dst);
 
-            File.Delete(filename_dst);
+            if (File.Exists(filename_dst))
+            {
+                Console.WriteLine("Warning: destination file will be replaced");
+                File.Delete(filename_dst);
+            }
+
             BinaryWriter bw = new BinaryWriter(File.OpenWrite(filename_dst));
 
             if (CheckExtension(filename_dst, "xml") )

@@ -60,6 +60,40 @@ namespace AlienBML
 
 #endregion
 
+        static private void FixupXmlEntityInternal(ref string str, string src, string dest)
+        {
+            if (str.IndexOf(src) >= 0)
+            {
+                str = str.Replace(src, dest);
+            }
+        }
+
+        static public string EncodeXml(string str)
+        {
+            string xml_str = str;
+
+            FixupXmlEntityInternal(ref xml_str, "\"", "&quot;");
+            FixupXmlEntityInternal(ref xml_str, "&", "&amp;");
+            FixupXmlEntityInternal(ref xml_str, "'", "&apos;");
+            FixupXmlEntityInternal(ref xml_str, "<", "&lt;");
+            FixupXmlEntityInternal(ref xml_str, ">", "&gt;");
+
+            return xml_str;
+        }
+
+        static public string DecodeXml(string xml_str)
+        {
+            string str = xml_str;
+
+            FixupXmlEntityInternal(ref str, "&quot;", "\"");
+            FixupXmlEntityInternal(ref str, "&amp;", "&");
+            FixupXmlEntityInternal(ref str, "&apos;", "'");
+            FixupXmlEntityInternal(ref str, "&lt;", "<");
+            FixupXmlEntityInternal(ref str, "&gt;", ">");
+
+            return str;
+        }
+
         struct Inst
         {
             public string Value;
